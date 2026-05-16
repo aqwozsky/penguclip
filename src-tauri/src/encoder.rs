@@ -93,23 +93,32 @@ pub fn build_ffmpeg_command(
     buffer_dir: &PathBuf,
     segment_time: u32,
     _max_segments: u32,
+    use_wayland: bool,
 ) -> anyhow::Result<Command> {
     let seg_pattern = buffer_dir.join("seg_%05d.mp4");
-
     let mut cmd = Command::new("ffmpeg");
 
-    // --- Input: x11grab (direct screen capture) ---
-    // Uses X11 SHM for zero-copy capture. Works on X11 and XWayland.
-    let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
-    let screen_size = detect_screen_size(&display);
-    cmd.args([
-        "-f", "x11grab",
-        "-video_size", &screen_size,
-        "-framerate", &fps.value().to_string(),
-        "-i", &display,
-        // Draw mouse cursor in recording
-        "-draw_mouse", "0",
-    ]);
+    if use_wayland {
+        // Wayland: wf-recorder pipes raw yuv420p to stdin
+        cmd.args([
+            "-f", "rawvideo",
+            "-pixel_format", "yuv420p",
+            "-video_size", "1920x1080",
+            "-framerate", &fps.value().to_string(),
+            "-i", "pipe:0",
+        ]);
+    } else {
+        // X11: capture screen directly via x11grab
+        let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+        let screen_size = detect_screen_size(&display);
+        cmd.args([
+            "-f", "x11grab",
+            "-video_size", &screen_size,
+            "-framerate", &fps.value().to_string(),
+            "-i", &display,
+            "-draw_mouse", "0",
+        ]);
+    }
 
     // --- Video encoding ---
     cmd.arg("-c:v");
@@ -199,8 +208,9 @@ pub fn start_encoding(
         fps,
         quality,
         &buffer_dir,
-        2,  // 2-second segments
-        60, // max 60 segments = 120 seconds of buffer
+        2,   // segment_time
+        60,  // max_segments
+        false, // not wayland
     )?;
 
     let process = cmd

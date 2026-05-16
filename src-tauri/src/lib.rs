@@ -128,11 +128,8 @@ async fn start_recording(
     if state.recording.load(Ordering::Relaxed) {
         return Err("Recording is already active".to_string());
     }
-
     let config = state.config.read().await.clone();
     let encoder_type = state.encoder_type.lock().await.unwrap_or(EncoderType::Software);
-
-    // Create buffer directory inside ~/.penguclip/buffer/
     let app_dir = AppConfig::app_dir();
     let buffer_dir = app_dir.join("buffer").join(std::process::id().to_string());
     std::fs::create_dir_all(&buffer_dir)
@@ -141,18 +138,74 @@ async fn start_recording(
     // Initialize ring buffer
     let rb = RingBuffer::new(buffer_dir.clone(), 2, config.clip_duration_secs * 2);
 
-    // Start FFmpeg encoder with x11grab (captures screen directly)
-    let _encoder_session = encoder::start_encoding(
-        encoder_type,
-        config.recording_fps,
-        config.video_quality,
-        buffer_dir.clone(),
-    )
-    .map_err(|e| format!("Failed to start encoder: {}", e))?;
+    // Detect capture backend
+    let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    let has_wf = std::process::Command::new("which")
+        .arg("wf-recorder")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let use_wayland = session_type == "wayland" && has_wf;
+    if use_wayland {
+        log::info!("Wayland detected — using wf-recorder for capture");
+    } else {
+        log::info!("X11 — using x11grab for capture");
+    }
+
+    // Start FFmpeg encoder
+    let mut ffmpeg_cmd = encoder::build_ffmpeg_command(
+        encoder_type, config.recording_fps, config.video_quality,
+        &buffer_dir, 2, 60, use_wayland,
+    ).map_err(|e| format!("{}", e))?;
+
+    let use_wayland = session_type == "wayland" && has_wf;
+    if use_wayland {
+        // Wayland: wf-recorder pipes raw yuv420p to FFmpeg stdin
+        log::info!("Wayland detected — using wf-recorder for capture");
+    } else {
+        // X11: x11grab built into ffmpeg command (already configured)
+        log::info!("X11 — using x11grab for capture");
+    }
+
+    let mut ffmpeg_child = ffmpeg_cmd
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start FFmpeg: {}", e))?;
+
+    log::info!("FFmpeg encoder started — PID: {}", ffmpeg_child.id());
+
+    // Spawn capture process
+    let mut handles = state.capture_handles.lock().await;
+    if use_wayland {
+        let ffmpeg_stdin = ffmpeg_child.stdin.take()
+            .ok_or("FFmpeg stdin not available")?;
+        match std::process::Command::new("wf-recorder")
+            .args(["-c", "rawvideo", "-p", "yuv420p",
+                   "-f", "-",  // output to stdout
+                   "--bf", "0"])  // no buffering
+            .stdin(std::process::Stdio::null())
+            .stdout(ffmpeg_stdin)
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => {
+                log::info!("wf-recorder started — PID: {}", child.id());
+                handles.push(child);
+            }
+            Err(e) => {
+                log::error!("Failed to start wf-recorder: {}", e);
+                return Err("wf-recorder failed to start".to_string());
+            }
+        }
+    }
+    handles.push(ffmpeg_child);
 
     log::info!(
-        "Recording started — encoder: {}, screen capture via x11grab",
+        "Recording started — encoder: {}, capture: {}",
         encoder_type.label(),
+        if use_wayland { "wf-recorder" } else { "x11grab" },
     );
 
     // Store state
@@ -571,8 +624,37 @@ async fn do_clip_save(app_handle: &tauri::AppHandle, source: &str) {
             }
         }
     } else {
-        log::warn!("Trigger received but no active recording");
-        notify::clip_failed("No active recording. Start recording first.");
+        // Quick-clip: auto-start recording, wait, save, stop
+        log::info!("Quick-clip: auto-starting recording for {}s", config.clip_duration_secs);
+        notify::clip_saved(&format!("Quick-clip: recording {}s...", config.clip_duration_secs));
+
+        // Start recording
+        if let Err(e) = start_recording(app_handle.state::<AppState>(), app_handle.clone()).await {
+            notify::clip_failed(&e);
+            return;
+        }
+
+        // Wait for the buffer to fill
+        tokio::time::sleep(std::time::Duration::from_secs((config.clip_duration_secs + 3) as u64)).await;
+
+        // Save clip
+        let mut ring_buffer = state.ring_buffer.lock().await;
+        if let Some(rb) = ring_buffer.as_mut() {
+            match ring_buffer::save_clip(rb, &config.output_folder, config.clip_duration_secs) {
+                Ok(path) => {
+                    let path_str = path.to_string_lossy().to_string();
+                    log::info!("Quick-clip saved: {}", path_str);
+                    notify::clip_saved(&path_str);
+                    let _ = app_handle.emit("clip-saved", serde_json::json!({ "path": path_str }));
+                }
+                Err(e) => {
+                    notify::clip_failed(&e.to_string());
+                }
+            }
+        }
+
+        // Stop recording
+        let _ = stop_recording(app_handle.state::<AppState>(), app_handle.clone()).await;
     }
 }
 
