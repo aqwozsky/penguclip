@@ -595,6 +595,116 @@ pub fn run() {
                 log::warn!("Failed to create .penguclip directory: {}", e);
             }
 
+            // ── System Tray ──────────────────────────────────────
+            use tauri::{
+                menu::{MenuBuilder, MenuItemBuilder},
+                tray::TrayIconBuilder,
+            };
+
+            let start_item = MenuItemBuilder::with_id("start", "● Start Recording").build(app)?;
+            let stop_item = MenuItemBuilder::with_id("stop", "■ Stop Recording").build(app)?;
+            let save_item = MenuItemBuilder::with_id("save", "Save Clip").build(app)?;
+            let folder_item = MenuItemBuilder::with_id("folder", "Open Clips Folder").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+
+            let menu = MenuBuilder::new(app)
+                .item(&start_item)
+                .item(&stop_item)
+                .item(&save_item)
+                .separator()
+                .item(&folder_item)
+                .separator()
+                .item(&quit_item)
+                .build()?;
+
+            // Use a simple 32x32 RGBA icon (filled circle = penguin placeholder)
+            let mut icon_pixels = vec![0u8; 32 * 32 * 4];
+            let center = 16.0;
+            for y in 0..32 {
+                for x in 0..32 {
+                    let dx = x as f32 - center;
+                    let dy = y as f32 - center;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    let idx = (y * 32 + x) * 4;
+                    if dist < 14.0 {
+                        // White body
+                        icon_pixels[idx] = 255;
+                        icon_pixels[idx + 1] = 255;
+                        icon_pixels[idx + 2] = 255;
+                        icon_pixels[idx + 3] = 255;
+                    } else if dist < 15.0 {
+                        // Dark ring
+                        icon_pixels[idx] = 10;
+                        icon_pixels[idx + 1] = 10;
+                        icon_pixels[idx + 2] = 10;
+                        icon_pixels[idx + 3] = 255;
+                    }
+                    // else transparent
+                }
+            }
+            let icon = tauri::image::Image::new(&icon_pixels, 32, 32);
+
+            let _tray = TrayIconBuilder::new()
+                .icon(icon)
+                .menu(&menu)
+                .tooltip("Penguclip")
+                .on_menu_event(move |app_handle, event| {
+                    match event.id().as_ref() {
+                        "start" => {
+                            let ah = app_handle.clone();
+                            let state = ah.state::<AppState>();
+                            if !state.recording.load(Ordering::Relaxed) {
+                                tauri::async_runtime::spawn(async move {
+                                    let result = start_recording(
+                                        ah.state::<AppState>(),
+                                        ah.clone(),
+                                    ).await;
+                                    if let Err(e) = result {
+                                        notify::clip_failed(&e);
+                                    }
+                                });
+                            }
+                        }
+                        "stop" => {
+                            let ah = app_handle.clone();
+                            let state = ah.state::<AppState>();
+                            if state.recording.load(Ordering::Relaxed) {
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = stop_recording(
+                                        ah.state::<AppState>(),
+                                        ah.clone(),
+                                    ).await;
+                                });
+                            }
+                        }
+                        "save" => {
+                            let ah = app_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                do_clip_save(&ah, "tray").await;
+                            });
+                        }
+                        "folder" => {
+                            let _ = std::process::Command::new("xdg-open")
+                                .arg(AppConfig::app_dir().join("clips"))
+                                .spawn();
+                        }
+                        "quit" => {
+                            app_handle.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app)?;
+
+            // ── Prevent close = minimize to tray ─────────────────
+            let window = app.get_webview_window("main").unwrap();
+            let window_clone = window.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    window_clone.hide().ok();
+                }
+            });
+
             let config = AppConfig::load_or_default()
                 .expect("Failed to load configuration");
 
@@ -630,7 +740,6 @@ pub fn run() {
                     });
 
                     let app_handle_clone = app_handle.clone();
-                    let hotkey_running = running.clone();
                     tauri::async_runtime::spawn(async move {
                         while let Some(trigger) = hotkey_rx.recv().await {
                             do_clip_save(&app_handle_clone, "hotkey").await;
