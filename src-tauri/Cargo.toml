@@ -1,0 +1,55 @@
+[package]
+name = "penguclip"
+version = "0.1.0"
+description = "High-performance background clipping for Linux"
+authors = ["aqwozsky"]
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[lib]
+name = "penguclip_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# XDG Desktop Portal bindings for screen capture session management.
+# Note: The 'pipewire' feature is disabled due to libspa incompatibility
+# with current PipeWire headers. Frame capture is handled via pw-cat
+# subprocess or GStreamer pipeline — see capture.rs for details.
+ashpd = { version = "0.10", features = ["tokio"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Global hotkey listener (X11 primary, limited Wayland support)
+rdev = "0.5"
+
+# Config directory path resolution
+dirs = "6"
+
+# Timestamp formatting for clip filenames
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# UUID for unique session IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Shared state across threads
+parking_lot = "0.12"
