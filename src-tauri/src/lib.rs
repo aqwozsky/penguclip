@@ -64,7 +64,7 @@ async fn save_config(
     clip_mode: String,
     app_filters: Vec<String>,
 ) -> Result<AppConfig, String> {
-    let output_folder = PathBuf::from(&output_folder);
+    let output_folder = AppConfig::expand_tilde(&output_folder);
     std::fs::create_dir_all(&output_folder)
         .map_err(|e| format!("Failed to create output folder: {}", e))?;
 
@@ -384,7 +384,7 @@ async fn update_settings(
     let mut config = state.config.read().await.clone();
 
     if let Some(folder) = output_folder {
-        config.output_folder = PathBuf::from(&folder);
+        config.output_folder = AppConfig::expand_tilde(&folder);
         std::fs::create_dir_all(&config.output_folder)
             .map_err(|e| format!("Failed to create output folder: {}", e))?;
     }
