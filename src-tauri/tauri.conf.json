@@ -23,8 +23,7 @@
     ],
     "security": {
       "csp": null
-    },
-    "withGlobalTauri": false
+    }
   },
   "plugins": {
     "shell": {
