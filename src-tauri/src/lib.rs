@@ -141,8 +141,8 @@ async fn start_recording(
     // Initialize ring buffer
     let rb = RingBuffer::new(buffer_dir.clone(), 2, config.clip_duration_secs * 2);
 
-    // Start FFmpeg encoder
-    let mut encoder_session = encoder::start_encoding(
+    // Start FFmpeg encoder with x11grab (captures screen directly)
+    let _encoder_session = encoder::start_encoding(
         encoder_type,
         config.recording_fps,
         config.video_quality,
@@ -150,48 +150,12 @@ async fn start_recording(
     )
     .map_err(|e| format!("Failed to start encoder: {}", e))?;
 
-    // Try to start frame capture via pw-cat
-    // This requires xdg-desktop-portal ScreenCast session started first.
-    // For now, we set up the infrastructure. The actual capture from
-    // PipeWire requires the portal session which the user grants via dialog.
-    let ffmpeg_stdin = encoder_session
-        .process
-        .stdin
-        .take()
-        .ok_or("FFmpeg stdin not available")?;
+    log::info!(
+        "Recording started — encoder: {}, screen capture via x11grab",
+        encoder_type.label(),
+    );
 
-    // Spawn capture thread — tries pw-cat, falls back to x11grab if available
-    let fps = config.recording_fps.value();
-    let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
-    let mut handles = state.capture_handles.lock().await;
-
-    if session_type == "x11" {
-        // X11: use x11grab directly into FFmpeg (simpler, works now)
-        log::info!("X11 detected — using x11grab for capture");
-        // Note: we already started FFmpeg with pipe:0 input.
-        // We'd need to restart FFmpeg with x11grab input instead.
-        // For the MVP, we document this and let the user configure manually.
-        log::warn!("x11grab capture not wired yet — recording will produce empty segments");
-    } else {
-        log::info!("Wayland detected — use ScreenCast portal for capture");
-        // On Wayland: pw-cat --record pipes raw video to FFmpeg stdin
-        match std::process::Command::new("pw-cat")
-            .args(["--record", "--media-type", "Video", "--format", "RGBA"])
-            .stdin(std::process::Stdio::null())
-            .stdout(ffmpeg_stdin)
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => {
-                log::info!("pw-cat started — PID: {}", child.id());
-                handles.push(child);
-            }
-            Err(e) => {
-                log::warn!("pw-cat not available: {}. Recording will use empty segments.", e);
-            }
-        }
-    }
-
+    // Store state
     *state.ring_buffer.lock().await = Some(rb);
     *state.buffer_dir.lock().await = Some(buffer_dir.clone());
     state.recording.store(true, Ordering::Relaxed);

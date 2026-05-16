@@ -38,6 +38,30 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Detect the current screen resolution via xrandr.
+fn detect_screen_size(display: &str) -> String {
+    let output = Command::new("xrandr")
+        .args(["-display", display, "--current"])
+        .output()
+        .ok();
+    if let Some(o) = output {
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        for line in stdout.lines() {
+            if line.contains(" connected") || line.contains(" primary") {
+                // Parse "1920x1080+0+0" from xrandr output
+                if let Some(res) = line.split_whitespace().find(|w| w.contains('x') && w.chars().filter(|c| *c == 'x').count() == 1) {
+                    let clean: String = res.chars().take_while(|c| c.is_ascii_digit() || *c == 'x').collect();
+                    if clean.contains('x') {
+                        return clean;
+                    }
+                }
+            }
+        }
+    }
+    // Default fallback
+    "1920x1080".to_string()
+}
+
 /// An active FFmpeg encoding session.
 pub struct EncoderSession {
     /// The FFmpeg child process handle.
@@ -74,16 +98,17 @@ pub fn build_ffmpeg_command(
 
     let mut cmd = Command::new("ffmpeg");
 
-    // --- Input configuration ---
-    // We use raw video input via stdin. The capture module feeds
-    // raw RGBA or YUV frames through the stdin pipe.
-    // Format: rawvideo, pixel format rgba, frame size from portal.
+    // --- Input: x11grab (direct screen capture) ---
+    // Uses X11 SHM for zero-copy capture. Works on X11 and XWayland.
+    let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+    let screen_size = detect_screen_size(&display);
     cmd.args([
-        "-f", "rawvideo",
-        "-pixel_format", "rgba",
-        "-video_size", "1920x1080", // will be overridden by portal info
+        "-f", "x11grab",
+        "-video_size", &screen_size,
         "-framerate", &fps.value().to_string(),
-        "-i", "pipe:0", // Read raw frames from stdin
+        "-i", &display,
+        // Draw mouse cursor in recording
+        "-draw_mouse", "0",
     ]);
 
     // --- Video encoding ---
