@@ -13,24 +13,39 @@ High-performance background clipping for Linux — capture your best gaming mome
 
 ## System Requirements
 
-- **Linux** with PipeWire and XDG Desktop Portal
-- **FFmpeg** installed (`sudo pacman -S ffmpeg`)
-- For hardware encoding:
-  - **Intel/AMD**: `libva` and `mesa` (`sudo pacman -S libva mesa`)
-  - **NVIDIA**: NVIDIA drivers with NVENC support
+- **Any Linux distribution** with PipeWire + XDG Desktop Portal
+- **FFmpeg** (for encoding and clip processing)
+- **Tauri v2 system deps** (WebKitGTK, etc. — see [Tauri docs](https://v2.tauri.app/start/prerequisites/#linux))
+- Hardware encoding (optional but recommended):
+  - **Intel/AMD**: VA-API (`libva`, `mesa`)
+  - **NVIDIA**: proprietary drivers with NVENC
+- **xdotool** or **wmctrl** (optional, for app/window listing)
 
-### Install dependencies (Arch / CachyOS)
+### Install dependencies
 
-```bash
-sudo pacman -S ffmpeg pipewire wireplumber \
-  xdg-desktop-portal xdg-desktop-portal-gtk \
-  libva mesa
-```
+| Distro | Command |
+|--------|---------|
+| **Arch / CachyOS** | `sudo pacman -S ffmpeg pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-gtk libva mesa webkit2gtk-4.1` |
+| **Fedora** | `sudo dnf install ffmpeg-free pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-gtk libva mesa-libVA webkit2gtk4.1-devel` |
+| **Ubuntu / Debian** | `sudo apt install ffmpeg pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-gtk libva2 mesa-va-drivers libwebkit2gtk-4.1-dev` |
+| **openSUSE** | `sudo zypper install ffmpeg pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-gtk libva2 Mesa-libva libwebkit2gtk-4_1-0` |
+| **NixOS** | Add `ffmpeg pipewire wireplumber xdg-desktop-portal libva` to `environment.systemPackages` |
+| **Void** | `sudo xbps-install ffmpeg pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-gtk libva mesa-vaapi webkit2gtk-devel` |
 
-For Hyprland users:
-```bash
-sudo pacman -S xdg-desktop-portal-hyprland
-```
+For **Hyprland / Sway / wlroots**: also install `xdg-desktop-portal-hyprland` or `xdg-desktop-portal-wlr`.
+
+### What the code depends on (distro-agnostic)
+
+Penguclip uses only standard Linux interfaces — nothing distro-specific:
+
+| Component | Linux API | Works on |
+|-----------|-----------|----------|
+| Screen capture | XDG Desktop Portal ScreenCast | All DEs (GNOME, KDE, Hyprland, Sway, XFCE, ...) |
+| Audio/video streams | PipeWire | Standard since 2021 |
+| Hardware encoding | VA-API / NVENC via FFmpeg | All GPUs, all distros |
+| Global hotkeys | XRecord extension (X11) | Every X11 desktop |
+| File dialogs | XDG Desktop Portal / Tauri | All DEs |
+| GPU detection | `nvidia-smi` + `vainfo` | Standard tools |
 
 ## Development
 
