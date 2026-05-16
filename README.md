@@ -47,6 +47,54 @@ Penguclip uses only standard Linux interfaces — nothing distro-specific:
 | File dialogs | XDG Desktop Portal / Tauri | All DEs |
 | GPU detection | `nvidia-smi` + `vainfo` | Standard tools |
 
+## Usage
+
+### Launch from terminal
+
+```bash
+penguclip
+```
+
+### NVIDIA + Wayland fix
+
+On **NVIDIA GPUs with Wayland**, WebKitGTK produces a blank window or crashes with `Error 71 (Protocol error)`. Run with:
+
+```bash
+WEBKIT_DISABLE_COMPOSITING_MODE=1 GDK_BACKEND=x11 DISPLAY=:0 penguclip
+```
+
+To make this permanent, create an alias:
+
+```bash
+# Add to ~/.bashrc or ~/.config/fish/config.fish:
+alias penguclip='WEBKIT_DISABLE_COMPOSITING_MODE=1 GDK_BACKEND=x11 DISPLAY=:0 penguclip'
+```
+
+Or copy the desktop entry with the fix applied:
+
+```bash
+cp ~/.local/share/applications/penguclip.desktop ~/.local/share/applications/penguclip-wayland.desktop
+sed -i 's|^Exec=.*|Exec=env WEBKIT_DISABLE_COMPOSITING_MODE=1 GDK_BACKEND=x11 DISPLAY=:0 penguclip|' ~/.local/share/applications/penguclip-wayland.desktop
+update-desktop-database ~/.local/share/applications/
+```
+
+### First launch
+
+The setup wizard appears. Configure:
+- **Output folder** — where clips are saved (default: `~/.penguclip/clips/`)
+- **Clip mode** — Anything / Games Only / Specific Apps
+- **FPS, quality, duration, hotkey**
+
+After setup, press **Ctrl+R** (or your configured hotkey) to save clips. Start recording first via the Dashboard tab.
+
+All data lives in `~/.penguclip/`:
+```
+~/.penguclip/
+├── config.json    ← your settings
+├── clips/         ← saved MP4 clips
+└── buffer/        ← temporary recording segments
+```
+
 ## Development
 
 ```bash
@@ -58,14 +106,6 @@ pnpm tauri dev
 
 # Build for production
 pnpm tauri build
-```
-
-### Linux GPU quirks
-
-If you see a blank window or GBM buffer errors on NVIDIA + Wayland:
-
-```bash
-WEBKIT_DISABLE_COMPOSITING_MODE=1 GDK_BACKEND=x11 DISPLAY=:0 ./src-tauri/target/release/penguclip
 ```
 
 ## Project Structure
