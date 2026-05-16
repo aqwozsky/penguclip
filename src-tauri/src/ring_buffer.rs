@@ -134,6 +134,9 @@ impl RingBuffer {
     ///
     /// Returns the list of segment paths that cover approximately
     /// `duration_secs` of recent footage.
+    ///
+    /// Skips the last segment (currently being written by FFmpeg —
+    /// no moov atom yet, would fail concat).
     pub fn get_recent_segments(
         &self,
         duration_secs: u32,
@@ -141,12 +144,15 @@ impl RingBuffer {
         let needed = (duration_secs / self.segment_duration_secs) as usize;
         let available = self.segments.len();
 
-        if available == 0 {
+        // Need at least 2 segments — one complete + one being written
+        if available < 2 {
             return vec![];
         }
 
-        let take = needed.min(available);
-        let start = available - take;
+        // Skip the last segment (still being written, no moov atom)
+        let complete = available - 1;
+        let take = needed.min(complete);
+        let start = complete - take;
 
         self.segments
             .iter()
