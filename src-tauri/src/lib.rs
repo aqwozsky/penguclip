@@ -4,6 +4,8 @@ mod capture;
 mod config;
 mod encoder;
 mod hotkey;
+pub mod ipc;
+mod notify;
 mod ring_buffer;
 
 use capture::EncoderType;
@@ -568,6 +570,48 @@ async fn detect_game() -> Result<bool, String> {
 
 // ─── Tauri App Setup ───────────────────────────────────────────────
 
+/// Shared clip-save logic used by both hotkey and IPC trigger.
+async fn do_clip_save(app_handle: &tauri::AppHandle, source: &str) {
+    log::info!("Clip trigger from: {}", source);
+    let state: tauri::State<'_, AppState> = app_handle.state();
+    let config = state.config.read().await.clone();
+
+    // Check clip mode
+    if config.clip_mode == ClipMode::Games {
+        match detect_game().await {
+            Ok(false) => {
+                log::debug!("No game detected — skipping");
+                return;
+            }
+            Err(_) => {}
+            _ => {}
+        }
+    }
+
+    let mut ring_buffer = state.ring_buffer.lock().await;
+    if let Some(rb) = ring_buffer.as_mut() {
+        match ring_buffer::save_clip(rb, &config.output_folder, config.clip_duration_secs) {
+            Ok(path) => {
+                let path_str = path.to_string_lossy().to_string();
+                log::info!("Clip saved: {}", path_str);
+                notify::clip_saved(&path_str);
+                let _ = app_handle.emit("clip-saved", serde_json::json!({
+                    "path": path_str,
+                }));
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                log::error!("Failed to save clip: {}", err_str);
+                notify::clip_failed(&err_str);
+                let _ = app_handle.emit("clip-error", serde_json::json!({ "error": err_str }));
+            }
+        }
+    } else {
+        log::warn!("Trigger received but no active recording");
+        notify::clip_failed("No active recording. Start recording first.");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::Builder::from_env(
@@ -622,40 +666,19 @@ pub fn run() {
                     });
 
                     let app_handle_clone = app_handle.clone();
+                    let hotkey_running = running.clone();
                     tauri::async_runtime::spawn(async move {
                         while let Some(trigger) = hotkey_rx.recv().await {
-                            log::info!("Hotkey triggered at {}", trigger.timestamp);
-                            let state: tauri::State<'_, AppState> = app_handle_clone.state();
-                            let config = state.config.read().await.clone();
+                            do_clip_save(&app_handle_clone, "hotkey").await;
+                        }
+                    });
 
-                            // Check clip mode — if Games, only save if game detected
-                            if config.clip_mode == ClipMode::Games {
-                                match detect_game().await {
-                                    Ok(false) => {
-                                        log::debug!("No game detected — skipping clip save");
-                                        continue;
-                                    }
-                                    Err(_) => {} // Proceed anyway if detection fails
-                                    _ => {}
-                                }
-                            }
-
-                            let mut ring_buffer = state.ring_buffer.lock().await;
-                            if let Some(rb) = ring_buffer.as_mut() {
-                                match ring_buffer::save_clip(rb, &config.output_folder, config.clip_duration_secs) {
-                                    Ok(path) => {
-                                        log::info!("Clip saved: {}", path.display());
-                                        let _ = app_handle_clone.emit("clip-saved", serde_json::json!({
-                                            "path": path.to_string_lossy(),
-                                            "timestamp": trigger.timestamp.to_rfc3339(),
-                                        }));
-                                    }
-                                    Err(e) => {
-                                        log::error!("Failed to save clip: {}", e);
-                                        let _ = app_handle_clone.emit("clip-error", serde_json::json!({ "error": e.to_string() }));
-                                    }
-                                }
-                            }
+                    // Start IPC listener for Wayland (penguclip --trigger-clip)
+                    let mut ipc_rx = ipc::start_ipc_listener(running.clone());
+                    let app_handle_ipc = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        while ipc_rx.recv().await.is_some() {
+                            do_clip_save(&app_handle_ipc, "trigger-clip").await;
                         }
                     });
 
@@ -663,6 +686,16 @@ pub fn run() {
                 }
                 Err(e) => {
                     log::error!("Failed to parse hotkey '{}': {} — hotkey disabled", config.hotkey, e);
+                    // Still start IPC even if hotkey parse fails
+                    let running = Arc::new(AtomicBool::new(true));
+                    let mut ipc_rx = ipc::start_ipc_listener(running.clone());
+                    let app_handle_ipc = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        while ipc_rx.recv().await.is_some() {
+                            do_clip_save(&app_handle_ipc, "trigger-clip").await;
+                        }
+                    });
+                    app.manage(running);
                 }
             }
 

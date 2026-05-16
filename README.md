@@ -87,6 +87,22 @@ The setup wizard appears. Configure:
 
 After setup, press **Ctrl+R** (or your configured hotkey) to save clips. Start recording first via the Dashboard tab.
 
+### Wayland hotkey setup (Hyprland, Sway, etc.)
+
+Global hotkeys via XRecord only work on X11. On Wayland, bind a compositor shortcut:
+
+**Hyprland** — add to `~/.config/hypr/hyprland.conf`:
+```
+bind = $mainMod, R, exec, penguclip --trigger-clip
+```
+
+**Sway** — add to `~/.config/sway/config`:
+```
+bindsym $mod+r exec penguclip --trigger-clip
+```
+
+This sends a trigger to the running penguclip instance via a Unix socket at `~/.penguclip/socket`. Make sure penguclip is already running first.
+
 All data lives in `~/.penguclip/`:
 ```
 ~/.penguclip/
